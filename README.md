@@ -78,3 +78,8 @@ test/v2/                      自测产物
 3. 依赖 LSP 提供多行文字判据，LSP 没加载时多行文字会被判成英文。
 4. 第三方输入法名单靠模块名匹配，名单外的输入法会走"未识别"回落，日志里能看出来。
 5. 本机禁止 NETLOAD 外部 .NET 程序集，所以只能用 AutoLISP 这条通道。
+## 仓库同步说明
+
+本机 git 协议连 github.com 会超时（api.github.com 正常），所以推送走 GitHub API：
+	ools/push-to-github.ps1。用法是把 DSH_SECRET_GITHUB_TOKEN_PAT 放进环境变量后直接运行，
+它会把本地 HEAD 的全部文件按 git 对象内容推成一次提交，远端与本地逐字节一致。
