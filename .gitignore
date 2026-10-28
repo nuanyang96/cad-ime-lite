@@ -1,0 +1,13 @@
+﻿# 备份文件
+*.bak
+*.bak-*
+*.bak-v*
+
+# 日志
+*.log
+
+# 临时
+*.tmp
+*.pfx
+.DS_Store
+Thumbs.db

@@ -1,0 +1,8 @@
+﻿== CadImeLite selftest6 18:28:05 ==
+焦点控件 cls=Chrome_WidgetWin_1
+父链=Chrome_WidgetWin_1
+InDrawArea=False（期望 False，v5 之前是 True）
+Tick 后 conv=0x0000 native=False
+日志: 18:28:06.706 cls=Chrome_WidgetWin_1 判据=类名表 目标=中 conv 0x0401->0x0401 OK | 父链=Chrome_WidgetWin_1 > WindowsForms10.Window.8.app.0.34f5582_r6_ad1 > WindowsForms10.MDICLIENT.app.0.34f5582_r6_ad1 > WindowsForms10.Window.8.app.0.34f5582_r6_ad1
+
+结论: 不被当绘图区=通过 / 走类名表(不按绘图区)=通过
