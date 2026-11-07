@@ -1,10 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 // CadImeLite v6 —— 中/英切换做成三条通道，按输入法能力自动选：
 //   ① tsf   ：TSF compartment（GUID 由 rules.ini 的 tsf_guid= 指定，读不到值就跳过）
@@ -845,6 +846,21 @@ class CadImeLite
 
     static void Tick()
     {
+        // v7：启动组没登记成功就一直重试（每 10 秒一次，最多 60 次）。
+        // 场景：装机时 AutoCAD 从没运行过，注册表里还没有配置项 ——
+        // 用户之后打开一次 CAD，这里就会自己补上，不需要再去双击程序。
+        if (!_startupOk && _startupTries < 60 &&
+            (DateTime.Now - _startupLastTry).TotalSeconds >= 10)
+        {
+            _startupLastTry = DateTime.Now;
+            _startupTries++;
+            if (AddStartupSuite(Path.Combine(LSP_DIR, LSP_ENTRY)))
+            {
+                _startupOk = true;
+                Log("自装：启动组补登记成功（第 " + _startupTries + " 次尝试）");
+            }
+        }
+
         if (_paused) return;
         IntPtr fg = GetForegroundWindow();
         if (fg == IntPtr.Zero) return;
@@ -1582,6 +1598,211 @@ class CadImeLite
         finally { try { File.WriteAllText(outPath, sb.ToString(), Encoding.UTF8); } catch { } }
     }
 
+    // ==================== v7 自安装 ====================
+    // 目标：别人只拿【一个 exe + 一份说明】就能用，不用再配 rules.ini、不用手动 APPLOAD。
+    // 每次启动自检，缺什么补什么；任何一步失败都不阻断启动，只写日志。
+    //   ① 写出内嵌的 CadImeSwitch.lsp 到 C:\CadImeSwitch\
+    //   ② 登记进 AutoCAD 启动组（HKCU\...\Profiles\<配置>\Dialogs\Appload\Startup）
+    //   ③ 首次运行：把自己复制到 %LOCALAPPDATA%\CadImeLite\ 并从那里重启
+    //   ④ 写默认 rules.ini（仅当不存在，绝不覆盖用户改过的）
+    //   ⑤ 加开机自启
+    //
+    // 为什么登记的是 autoload.lsp 而不是 CadImeSwitch.lsp：
+    //   本机（以及任何从 v6.5 升级上来的机器）启动组里已经登记了 autoload.lsp，
+    //   而 acaddoc.lsp 也可能加载它。如果改成登记 CadImeSwitch.lsp，就会**两处都加载**，
+    //   命令反应器重复注册，行为不可预期。
+    //   所以照原样：两个 LSP 都写出去，登记 autoload.lsp 这一个入口。
+    const string LSP_DIR = @"C:\CadImeSwitch";
+    const string LSP_ENTRY = "autoload.lsp";        // 启动组里登记这个
+    const string LSP_MAIN = "CadImeSwitch.lsp";     // autoload.lsp 内部会加载它
+    static string _pendingRelaunch;
+
+    /// <summary>启动组是否已登记成功；没成功就在 Tick 里定时重试（见 Tick 开头）。</summary>
+    static bool _startupOk;
+    static int _startupTries;
+    static DateTime _startupLastTry = DateTime.MinValue;
+
+    /// <summary>读内嵌资源（资源名编译时用 /resource:文件,逻辑名 指定）。</summary>
+    static string Embedded(string name)
+    {
+        try
+        {
+            var asm = System.Reflection.Assembly.GetExecutingAssembly();
+            using (var s = asm.GetManifestResourceStream(name))
+            {
+                if (s == null) return null;
+                using (var r = new StreamReader(s, Encoding.UTF8))
+                    return r.ReadToEnd();
+            }
+        }
+        catch { return null; }
+    }
+
+    /// <summary>内容不同才写：LSP 升级时能覆盖，又不无谓改动文件时间。</summary>
+    static bool WriteIfChanged(string content, string path)
+    {
+        try
+        {
+            if (content == null) return false;
+            if (File.Exists(path))
+            {
+                try { if (File.ReadAllText(path, Encoding.UTF8) == content) return true; }
+                catch { }
+            }
+            string di = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(di) && !Directory.Exists(di)) Directory.CreateDirectory(di);
+            File.WriteAllText(path, content, new UTF8Encoding(false));
+            return true;
+        }
+        catch { return false; }
+    }
+
+    static void SetAutorun(string exePath)
+    {
+        try
+        {
+            using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Windows\CurrentVersion\Run"))
+                if (k != null) k.SetValue("CadImeLite", "\"" + exePath + "\"", RegistryValueKind.String);
+        }
+        catch { }
+    }
+
+    /// <summary>把 LSP 登记到 AutoCAD 的「启动组」：每个已存在的配置各一条。</summary>
+    static bool AddStartupSuite(string lspPath)
+    {
+        bool any = false;
+        try
+        {
+            using (var acad = Registry.CurrentUser.OpenSubKey(@"Software\Autodesk\AutoCAD"))
+            {
+                if (acad == null) return false;
+                foreach (var ver in acad.GetSubKeyNames())
+                {
+                    using (var vk = acad.OpenSubKey(ver))
+                    {
+                        if (vk == null) continue;
+                        foreach (var app in vk.GetSubKeyNames())
+                        {
+                            if (app.IndexOf("ACAD-", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                            string profilesPath = app + @"\Profiles";
+                            using (var pk = vk.OpenSubKey(profilesPath))
+                            {
+                                if (pk == null) continue;
+                                foreach (var prof in pk.GetSubKeyNames())
+                                {
+                                    if (AddOneStartup(profilesPath + @"\" + prof + @"\Dialogs\Appload\Startup", lspPath))
+                                        any = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        catch { }
+        return any;
+    }
+
+    static bool AddOneStartup(string keyPath, string lspPath)
+    {
+        try
+        {
+            using (var k = Registry.CurrentUser.CreateSubKey(keyPath))
+            {
+                if (k == null) return false;
+                int max = 0;
+                for (int i = 1; i <= 64; i++)
+                {
+                    object v = k.GetValue(i + "Startup");
+                    if (v == null) break;
+                    max = i;
+                    if (string.Equals(v as string, lspPath, StringComparison.OrdinalIgnoreCase)) return true;   // 已登记
+                }
+                int slot = max + 1;
+                if (slot > 64) return false;
+                k.SetValue(slot + "Startup", lspPath, RegistryValueKind.String);
+                k.SetValue("NumStartup", slot, RegistryValueKind.DWord);
+                return true;
+            }
+        }
+        catch { return false; }
+    }
+
+    /// <summary>返回 false = 已把控制权交给 %LOCALAPPDATA% 下的副本，调用方应释放互斥体并退出。</summary>
+    static bool SelfInstall()
+    {
+        try
+        {
+            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            string targetDir = Path.Combine(local, "CadImeLite");
+            string targetExe = Path.Combine(targetDir, "CadImeLite.exe");
+            string curExe = Application.ExecutablePath;
+
+            bool fromTarget = false;
+            try
+            {
+                fromTarget = string.Equals(Path.GetFullPath(Path.GetDirectoryName(curExe)),
+                                           Path.GetFullPath(targetDir), StringComparison.OrdinalIgnoreCase);
+            }
+            catch { }
+
+            // ① LSP（两个都写：autoload 是入口，CadImeSwitch 是主体）
+            string mainFull = Path.Combine(LSP_DIR, LSP_MAIN);
+            string entryFull = Path.Combine(LSP_DIR, LSP_ENTRY);
+            if (!WriteIfChanged(Embedded(LSP_MAIN), mainFull))
+                Log("自装：主体 LSP 写入失败 " + mainFull + "（可能没有 C 盘权限）");
+            if (!WriteIfChanged(Embedded(LSP_ENTRY), entryFull))
+                Log("自装：入口 LSP 写入失败 " + entryFull + "（可能没有 C 盘权限）");
+
+            // ② 启动组（登记入口）
+            if (AddStartupSuite(entryFull))
+            {
+                _startupOk = true;
+                Log("自装：LSP 已登记到 AutoCAD 启动组 -> " + entryFull);
+            }
+            else Log("自装：未能登记启动组（AutoCAD 还没运行过？运行中就继续重试）");
+
+            // ④ rules.ini（仅当不存在）
+            try
+            {
+                if (!Directory.Exists(targetDir)) Directory.CreateDirectory(targetDir);
+                string rp = Path.Combine(targetDir, "rules.ini");
+                if (!File.Exists(rp))
+                {
+                    string rc = Embedded("rules.ini");
+                    if (rc != null) File.WriteAllText(rp, rc, new UTF8Encoding(false));
+                }
+            }
+            catch { }
+
+            // ③ 自身复制 + ⑤ 自启
+            if (!fromTarget)
+            {
+                bool copied = false;
+                try { File.Copy(curExe, targetExe, true); copied = true; }
+                catch (Exception ex) { Log("自装：复制自身失败 " + ex.Message + "（将原地运行）"); }
+
+                if (copied)
+                {
+                    SetAutorun(targetExe);
+                    _pendingRelaunch = targetExe;
+                    Log("自装：首次运行，已复制到 " + targetDir + "，即将从那里重启");
+                    return false;
+                }
+                SetAutorun(curExe);
+                return true;
+            }
+
+            SetAutorun(curExe);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log("自装异常（已忽略）：" + ex.Message);
+            return true;
+        }
+    }
+
     [STAThread]
     static void Main(string[] args)
     {
@@ -1600,6 +1821,18 @@ class CadImeLite
         {
             try { if (_singleMutex != null) { _singleMutex.ReleaseMutex(); _singleMutex.Dispose(); _singleMutex = null; } } catch { }
         };
+        // v7：先自装（写 LSP / 登记 AutoCAD 启动组 / 复制到 LOCALAPPDATA / 加自启）。
+        // 首次运行会把控制权交给本地副本 —— 必须**先释放互斥体**再启动新实例，
+        // 否则新实例拿不到互斥体会直接退出，表现为"双击没反应"。
+        if (!SelfInstall())
+        {
+            try { if (_singleMutex != null) { _singleMutex.ReleaseMutex(); _singleMutex.Dispose(); _singleMutex = null; } } catch { }
+            if (!string.IsNullOrEmpty(_pendingRelaunch))
+            {
+                try { System.Diagnostics.Process.Start(_pendingRelaunch); } catch { }
+            }
+            return;
+        }
         LoadRules();
         InstallShiftHook();
 
@@ -1627,7 +1860,7 @@ class CadImeLite
         timer.Interval = 200;
         timer.Tick += delegate { try { Tick(); } catch (Exception ex) { Log("异常: " + ex.Message); } };
         timer.Start();
-        Log("启动 v6.5 scope=" + string.Join(",", _scope.ToArray()) + " rules=" + _rules.Count + " 通道=" + _channel);
+        Log("启动 v7 scope=" + string.Join(",", _scope.ToArray()) + " rules=" + _rules.Count + " 通道=" + _channel);
         Application.Run();
     }
 }

@@ -1,8 +1,8 @@
-﻿# CadImeLite — CAD 输入法自动切换助手
+# CadImeLite — CAD 输入法自动切换助手
 
 在 AutoCAD 里自动切换中文/英文输入状态：命令行出英文，双击多行文字出中文，离开 CAD 复位中文。
 
-当前版本：**v6.5**（2026-10-28）
+当前版本：**v7**（2026-11-07）—— 单文件版，给别人只需一个 exe + 一份说明
 
 ## 为什么有这个项目
 
@@ -24,7 +24,8 @@
 | v6.0–v6.2 | 37,888–40,960 | 迭代过程版本 |
 | v6.3 | 41,472 | 微信输入法 3/3、搜狗拼音 3/3、主机 3/3 |
 | v6.4 | 42,496 | 单实例保护（`Global\CadImeLite.SingleInstance`） |
-| **v6.5** | **44,032** | 修托盘「中/英」图标（运行时绘制），当前交付版 |
+| **v6.5** | **44,032** | 修托盘「中/英」图标（运行时绘制）；v6 系列最终版 |
+| **v7** | **60,928** | **单文件版**：内嵌 LSP + rules.ini，启动时自装（写 LSP、登记 CAD 启动组、复制到 LOCALAPPDATA、加自启）。对外只需「1 个 exe + 1 份说明」 |
 
 验收覆盖两个环境：
 - 主机：Windows + AutoCAD 2024 + 微软拼音
@@ -34,12 +35,34 @@
 
 ## 安装
 
+### v7（现在）：一个 exe 搞定
+
+**双击 `交付/v7/CadImeLite.exe`**，它自己完成全部安装：
+
+1. 复制自己到 `%LOCALAPPDATA%\CadImeLite\` 并从那里重启（原位置的 exe 删了也不影响）
+2. 写出内嵌的 `CadImeSwitch.lsp` + `autoload.lsp` 到 `C:\CadImeSwitch\`
+3. 登记进 AutoCAD 启动组（`HKCU\...\Profiles\<配置>\Dialogs\Appload\Startup`）
+4. 写默认 `rules.ini`（仅当不存在，不覆盖用户改过的）
+5. 加开机自启
+
+**装完重启一次 AutoCAD** 即可。
+
+> 若装机时 AutoCAD 还没运行过（注册表里没有配置项），启动组登记会失败；
+> 程序会在 `Tick()` 里每 10 秒重试一次、最多 60 次，等 CAD 打开后自动补上。
+
+**发给别人**：只发 `交付/v7/` 里这两个文件
+—— `CadImeLite.exe` + `使用说明.md`。
+
+### v6.5 及以前：多文件
+
 1. 把 `交付/CadImeLite.exe` 和 `交付/rules.ini` 复制到 `%LOCALAPPDATA%\CadImeLite\`
 2. 加自启：`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 新建 `CadImeLite`，值指向该 exe
 3. 启动 exe，托盘出现「中/英」图标
 4. LSP 侧需要 `CadImeSwitch.lsp` + `autoload.lsp` 放进 `C:\CadImeSwitch\`，由 CAD 启动组或 `acaddoc.lsp` 加载（这是多行文字判据的来源，缺了它多行文字会被判成英文）
 
 也可以直接双击 `交付/安装-CadImeLite.bat`。
+
+> ⚠ `交付/CadImeLite-一键安装.cmd` 内嵌的是 **v4 老版**（25,088 字节），已过期，**不要发**。
 
 ## 回退
 
@@ -60,15 +83,22 @@ tsf_guid=           # 留空；第三方输入法不开放时无可用值
 ## 目录结构
 
 ```
-src/v2/Lite.cs                主程序源码（约 78 KB）
+src/v2/Lite.cs                主程序源码（约 90 KB）
+src/v2/res/                   v7 内嵌资源（编译时 /resource: 打进 exe）
+  CadImeSwitch.lsp             AutoLISP 主体
+  autoload.lsp                 加载入口
+  rules.ini                    默认配置
 test/v2/                      自测产物
-交付/CadImeLite.exe           当前交付版 v6.5
-交付/rules.ini                配置
-交付/变更说明-v*.md           每版改了什么、为什么
-交付/验收记录-v*.md           验收证据（日志原文、截图）
-交付/验收截图-v6/             托盘图标截图（其余含 CAD 界面的截图仅本机留档，不入仓库）
-交付/安装、更新、回退脚本
-错误复盘与改进.md             12 条踩坑记录
+交付/v7/                       ★ 对外交付：单文件版（exe + 说明）
+  CadImeLite.exe               v7 当前交付版（60,928 字节）
+  使用说明.md                   给使用者看的一页说明
+交付/CadImeLite.exe            v6.5（旧多文件版，保留备查）
+交付/rules.ini                 v6.5 配置
+交付/变更说明-v*.md             每版改了什么、为什么
+交付/验收记录-v*.md             验收证据（日志原文、截图）
+交付/v6.5-备份-20261107/        v6.5 完整备份（exe/源码/rules/两个 lsp），回退用
+交付/验收截图-v6/              托盘图标截图
+错误复盘与改进.md              12 条踩坑记录
 ```
 
 ## 已知限制

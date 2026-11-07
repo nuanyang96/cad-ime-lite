@@ -1,4 +1,4 @@
-﻿# 备份文件
+# 备份文件
 *.bak
 *.bak-*
 *.bak-v*
@@ -11,3 +11,10 @@
 *.pfx
 .DS_Store
 Thumbs.db
+
+# 构建产物（v7 编译输出）
+test/build-v7/
+test/extract-check/
+
+# 仅本机留档：含 CAD 界面的截图，不入仓库
+本机留档/
