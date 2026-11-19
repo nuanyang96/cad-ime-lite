@@ -1,0 +1,6 @@
+# Keep Windows batch files byte-exact.
+# cmd.exe mis-parses LF-only .bat/.cmd, and people download these straight from
+# the web UI, so the blob itself must stay CRLF: treat them as binary (no EOL
+# normalisation) instead of "text eol=crlf", which still stores LF in the blob.
+*.cmd -text
+*.bat -text

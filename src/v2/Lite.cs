@@ -805,13 +805,18 @@ class CadImeLite
     // 两条防串台规则：
     //   ① 第一次读到只记账、不行动；只有"看到它变化过"之后才相信，
     //      避免 CAD 上次退出时留下的残留状态把首条命令吃掉。
-    //   ② 绑定"变化发生时前台是哪个 CAD 进程"，两个 CAD 同开也不会互相污染。
-    //   ③ 两个小时没有任何变化就视为失效，退回窗口判据。
+    //   ② 每看到一次变化，就按"当时前台的那个 CAD 进程"记一份状态（v7.2）。
+    //      两个 CAD 各记各的：A 编辑文字的中文不会盖到 B 的绘图区，
+    //      B 跑过命令也不会把 A 的编辑框冲成英文。
+    //   ③ 单份记忆 120 分钟没更新就丢弃，退回窗口判据。
     static string _lspKey = null;
-    static string _lspLine = "";
+    static string _lspLine = "";        // 最近一次"真正驱动判断"的状态，只用于日志显示
     static bool _lspKnown = false;
     static uint _lspPid = 0;
-    static DateTime _lspSeen = DateTime.MinValue;
+    static string _lspPidLog = "";
+    static readonly Dictionary<uint, int> _wantByPid = new Dictionary<uint, int>();
+    static readonly Dictionary<uint, DateTime> _atByPid = new Dictionary<uint, DateTime>();
+    static readonly Dictionary<uint, string> _lineByPid = new Dictionary<uint, string>();
 
     static bool TryLspWant(uint pid, out int want)
     {
@@ -823,21 +828,52 @@ class CadImeLite
                 if (k == null) return false;
                 string line = (k.GetValue("Line3") as string) ?? "";
                 string cmd = (k.GetValue("Command") as string) ?? "";
+                string hits = (k.GetValue("Hits") as string) ?? "";
                 if (line.Length == 0) return false;
-                string key = cmd + "|" + line;
+                // Hits 也进 key：两个 CAD 先后执行同名命令时 cmd+line 可能一模一样，
+                // 只看这两项会以为"没变化"。两个实例的计数器各自独立，带上它更容易认出是另一次写入。
+                string key = cmd + "|" + line + "|" + hits;
                 if (_lspKey == null) { _lspKey = key; _lspLine = line; return false; }
                 if (key != _lspKey)
                 {
                     _lspKey = key; _lspLine = line;
-                    _lspKnown = true; _lspPid = pid; _lspSeen = DateTime.Now;
+                    _lspKnown = true; _lspPid = pid;
+                    _wantByPid[pid] = (line == "CN") ? 1 : 0;
+                    _atByPid[pid] = DateTime.Now;
+                    _lineByPid[pid] = line;
                 }
-                // v7：不再要求"当前前台进程 == 写入进程"。
-                // 两个 CAD 同开时共用一个注册表键，绑进程会导致切到另一个 CAD 就失效；
-                // 代价是极端情况下会短暂沿用另一个 CAD 的状态，下一条命令即自愈。
+                // v7.2（2026-11-19）：不再拿"全局那一条状态"直接下判断，改成用
+                // "这个 pid 自己上次写入的状态"。各 CAD 一份，互不覆盖：
+                //   A 停在多行文字里（CN）→ 记忆[A]=中；切到 B → B 没记忆 → 退回窗口判据（英文）；
+                //   B 跑一条命令 → 记忆[B]=英；回到 A → 记忆[A] 仍是中，编辑框能打中文。
+                // 每份记忆 120 分钟不更新就丢弃，防止反应器死掉后状态永久卡住。
                 if (!_lspKnown) return false;
-                if ((DateTime.Now - _lspSeen).TotalMinutes > 120) return false;
-                if (line == "CN") { want = 1; return true; }
-                if (line == "EN" || line == "IDLE") { want = 0; return true; }
+
+                DateTime at;
+                if (_atByPid.TryGetValue(pid, out at))
+                {
+                    if ((DateTime.Now - at).TotalMinutes <= 120)
+                    {
+                        want = _wantByPid[pid];
+                        // v7.2.1：日志要显示"真正驱动这次判断的那条状态"。
+                        // 之前这里沿用全局 _lspLine，两个 CAD 互切时会打出
+                        // 「判据=LSP(IDLE) 目标=中」这种看着自相矛盾的行。
+                        string mine;
+                        if (_lineByPid.TryGetValue(pid, out mine)) _lspLine = mine;
+                        return true;
+                    }
+                    _wantByPid.Remove(pid); _atByPid.Remove(pid); _lineByPid.Remove(pid);   // 过期就丢，等它自己下一条命令重写
+                    return false;
+                }
+
+                // 这个 pid 从来没写过状态（刚打开，或状态是另一个 CAD 写的）→ 退回窗口判据。
+                string k2 = _lspPid.ToString() + "|" + pid.ToString() + "|" + line;
+                if (k2 != _lspPidLog)
+                {
+                    _lspPidLog = k2;
+                    Log("pid=" + pid + " 还没有状态记忆（最近一次写入来自 pid=" + _lspPid + "）-> 退回窗口判据");
+                }
+                return false;
             }
         }
         catch { }
@@ -1860,7 +1896,7 @@ class CadImeLite
         timer.Interval = 200;
         timer.Tick += delegate { try { Tick(); } catch (Exception ex) { Log("异常: " + ex.Message); } };
         timer.Start();
-        Log("启动 v7 scope=" + string.Join(",", _scope.ToArray()) + " rules=" + _rules.Count + " 通道=" + _channel);
+        Log("启动 v7.2.1 scope=" + string.Join(",", _scope.ToArray()) + " rules=" + _rules.Count + " 通道=" + _channel);
         Application.Run();
     }
 }

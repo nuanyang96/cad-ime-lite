@@ -14,6 +14,11 @@ Thumbs.db
 
 # 构建产物（v7 编译输出）
 test/build-v7/
+test/build-v7.1/
+test/build-v7.2/
+test/build-v7.2.1/
+test/v7.1-unit/
+test/v7.2-unit/
 test/extract-check/
 
 # 仅本机留档：含 CAD 界面的截图，不入仓库
